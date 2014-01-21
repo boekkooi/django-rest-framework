@@ -362,11 +362,20 @@ If you are using a mixin across multiple views, you can take this a step further
 
 Using custom base classes is a good option if you have custom behavior that consistently needs to be repeated across a large number of views throughout your project.
 
-[cite]: https://docs.djangoproject.com/en/dev/ref/class-based-views/#base-vs-generic-views
+# Third party packages
 
+The following third party packages provide additional generic view implementations.
+
+## Django REST Framework bulk
+
+The [django-rest-framework-bulk package][django-rest-framework-bulk] implements generic view mixins as well as some common concrete generic views to allow to apply bulk operations via API requests.
+
+
+[cite]: https://docs.djangoproject.com/en/dev/ref/class-based-views/#base-vs-generic-views
 [GenericAPIView]: #genericapiview
 [ListModelMixin]: #listmodelmixin
 [CreateModelMixin]: #createmodelmixin
 [RetrieveModelMixin]: #retrievemodelmixin
 [UpdateModelMixin]: #updatemodelmixin
 [DestroyModelMixin]: #destroymodelmixin
+[django-rest-framework-bulk]: https://github.com/miki725/django-rest-framework-bulk

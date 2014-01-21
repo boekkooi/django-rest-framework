@@ -13,12 +13,15 @@ response content is handled by parsers and renderers.
 from __future__ import unicode_literals
 import copy
 import datetime
+import inspect
 import types
 from decimal import Decimal
+from django.core.paginator import Page
 from django.db import models
 from django.forms import widgets
 from django.utils.datastructures import SortedDict
-from rest_framework.compat import six
+from rest_framework.compat import get_concrete_model, six
+from rest_framework.settings import api_settings
 
 # Note: We do the following so that users of the framework can use this style:
 #
@@ -29,6 +32,27 @@ from rest_framework.compat import six
 
 from rest_framework.relations import *
 from rest_framework.fields import *
+
+
+def _resolve_model(obj):
+    """
+    Resolve supplied `obj` to a Django model class.
+
+    `obj` must be a Django model class itself, or a string
+    representation of one.  Useful in situtations like GH #1225 where
+    Django may not have resolved a string-based reference to a model in
+    another model's foreign key definition.
+
+    String representations should have the format:
+        'appname.ModelName'
+    """
+    if type(obj) == str and len(obj.split('.')) == 2:
+        app_name, model_name = obj.split('.')
+        return models.get_model(app_name, model_name)
+    elif inspect.isclass(obj) and issubclass(obj, models.Model):
+        return obj
+    else:
+        raise ValueError("{0} is not a Django model".format(obj))
 
 
 def pretty_name(name):
@@ -155,7 +179,7 @@ class BaseSerializer(WritableField):
     _dict_class = SortedDictWithMetadata
 
     def __init__(self, instance=None, data=None, files=None,
-                 context=None, partial=False, many=False,
+                 context=None, partial=False, many=None,
                  allow_add_remove=False, **kwargs):
         super(BaseSerializer, self).__init__(**kwargs)
         self.opts = self._options_class(self.Meta)
@@ -325,12 +349,13 @@ class BaseSerializer(WritableField):
             method = getattr(self, 'transform_%s' % field_name, None)
             if callable(method):
                 value = method(obj, value)
-            ret[key] = value
+            if not getattr(field, 'write_only', False):
+                ret[key] = value
             ret.fields[key] = self.augment_field(field, field_name, key, value)
 
         return ret
 
-    def from_native(self, data, files):
+    def from_native(self, data, files=None):
         """
         Deserialize primitives -> objects.
         """
@@ -360,6 +385,9 @@ class BaseSerializer(WritableField):
         Override default so that the serializer can be used as a nested field
         across relationships.
         """
+        if self.write_only:
+            return None
+
         if self.source == '*':
             return self.to_native(obj)
 
@@ -381,7 +409,12 @@ class BaseSerializer(WritableField):
         if value is None:
             return None
 
-        if self.many:
+        if self.many is not None:
+            many = self.many
+        else:
+            many = hasattr(value, '__iter__') and not isinstance(value, (Page, dict, six.text_type))
+
+        if many:
             return [self.to_native(item) for item in value]
         return self.to_native(value)
 
@@ -416,7 +449,9 @@ class BaseSerializer(WritableField):
 
         if self.source == '*':
             if value:
-                into.update(value)
+                reverted_data = self.restore_fields(value, {})
+                if not self._errors:
+                    into.update(reverted_data)
         else:
             if value in (None, ''):
                 into[(self.source or field_name)] = None
@@ -522,7 +557,16 @@ class BaseSerializer(WritableField):
         if self._data is None:
             obj = self.object
 
-            if self.many:
+            if self.many is not None:
+                many = self.many
+            else:
+                many = hasattr(obj, '__iter__') and not isinstance(obj, (Page, dict))
+                if many:
+                    warnings.warn('Implict list/queryset serialization is deprecated. '
+                                  'Use the `many=True` flag when instantiating the serializer.',
+                                  DeprecationWarning, stacklevel=2)
+
+            if many:
                 self._data = [self.to_native(item) for item in obj]
             else:
                 self._data = self.to_native(obj)
@@ -576,6 +620,7 @@ class ModelSerializerOptions(SerializerOptions):
         super(ModelSerializerOptions, self).__init__(meta)
         self.model = getattr(meta, 'model', None)
         self.read_only_fields = getattr(meta, 'read_only_fields', ())
+        self.write_only_fields = getattr(meta, 'write_only_fields', ())
 
 
 class ModelSerializer(Serializer):
@@ -602,6 +647,7 @@ class ModelSerializer(Serializer):
         models.TextField: CharField,
         models.CommaSeparatedIntegerField: CharField,
         models.BooleanField: BooleanField,
+        models.NullBooleanField: BooleanField,
         models.FileField: FileField,
         models.ImageField: ImageField,
     }
@@ -614,7 +660,7 @@ class ModelSerializer(Serializer):
         cls = self.opts.model
         assert cls is not None, \
                 "Serializer class '%s' is missing 'model' Meta option" % self.__class__.__name__
-        opts = cls._meta.concrete_model._meta
+        opts = get_concrete_model(cls)._meta
         ret = SortedDict()
         nested = bool(self.opts.depth)
 
@@ -638,7 +684,7 @@ class ModelSerializer(Serializer):
             if model_field.rel:
                 to_many = isinstance(model_field,
                                      models.fields.related.ManyToManyField)
-                related_model = model_field.rel.to
+                related_model = _resolve_model(model_field.rel.to)
 
                 if to_many and not model_field.rel.through._meta.auto_created:
                     has_through_model = True
@@ -647,10 +693,10 @@ class ModelSerializer(Serializer):
                 if len(inspect.getargspec(self.get_nested_field).args) == 2:
                     warnings.warn(
                         'The `get_nested_field(model_field)` call signature '
-                        'is deprecated. '
+                        'is due to be deprecated. '
                         'Use `get_nested_field(model_field, related_model, '
                         'to_many) instead',
-                        DeprecationWarning
+                        PendingDeprecationWarning
                     )
                     field = self.get_nested_field(model_field)
                 else:
@@ -659,10 +705,10 @@ class ModelSerializer(Serializer):
                 if len(inspect.getargspec(self.get_nested_field).args) == 3:
                     warnings.warn(
                         'The `get_related_field(model_field, to_many)` call '
-                        'signature is deprecated. '
+                        'signature is due to be deprecated. '
                         'Use `get_related_field(model_field, related_model, '
                         'to_many) instead',
-                        DeprecationWarning
+                        PendingDeprecationWarning
                     )
                     field = self.get_related_field(model_field, to_many=to_many)
                 else:
@@ -695,7 +741,9 @@ class ModelSerializer(Serializer):
             is_m2m = isinstance(relation.field,
                                 models.fields.related.ManyToManyField)
 
-            if is_m2m and not relation.field.rel.through._meta.auto_created:
+            if (is_m2m and
+                hasattr(relation.field.rel, 'through') and
+                not relation.field.rel.through._meta.auto_created):
                 has_through_model = True
 
             if nested:
@@ -712,16 +760,28 @@ class ModelSerializer(Serializer):
         # Add the `read_only` flag to any fields that have bee specified
         # in the `read_only_fields` option
         for field_name in self.opts.read_only_fields:
-            assert field_name not in self.base_fields.keys(), \
-                "field '%s' on serializer '%s' specified in " \
-                "`read_only_fields`, but also added " \
-                "as an explicit field.  Remove it from `read_only_fields`." % \
-                (field_name, self.__class__.__name__)
-            assert field_name in ret, \
-                "Non-existant field '%s' specified in `read_only_fields` " \
-                "on serializer '%s'." % \
-                (field_name, self.__class__.__name__)
+            assert field_name not in self.base_fields.keys(), (
+                "field '%s' on serializer '%s' specified in "
+                "`read_only_fields`, but also added "
+                "as an explicit field.  Remove it from `read_only_fields`." %
+                (field_name, self.__class__.__name__))
+            assert field_name in ret, (
+                "Non-existant field '%s' specified in `read_only_fields` "
+                "on serializer '%s'." %
+                (field_name, self.__class__.__name__))
             ret[field_name].read_only = True
+
+        for field_name in self.opts.write_only_fields:
+            assert field_name not in self.base_fields.keys(), (
+                "field '%s' on serializer '%s' specified in "
+                "`write_only_fields`, but also added "
+                "as an explicit field.  Remove it from `write_only_fields`." %
+                (field_name, self.__class__.__name__))
+            assert field_name in ret, (
+                "Non-existant field '%s' specified in `write_only_fields` "
+                "on serializer '%s'." %
+                (field_name, self.__class__.__name__))
+            ret[field_name].write_only = True
 
         return ret
 
@@ -825,7 +885,7 @@ class ModelSerializer(Serializer):
         Return a list of field names to exclude from model validation.
         """
         cls = self.opts.model
-        opts = cls._meta.concrete_model._meta
+        opts = get_concrete_model(cls)._meta
         exclusions = [field.name for field in opts.fields + opts.many_to_many]
 
         for field_name, field in self.fields.items():
@@ -863,7 +923,7 @@ class ModelSerializer(Serializer):
 
         # Reverse fk or one-to-one relations
         for (obj, model) in meta.get_all_related_objects_with_model():
-            field_name = obj.field.related_query_name()
+            field_name = obj.get_accessor_name()
             if field_name in attrs:
                 related_data[field_name] = attrs.pop(field_name)
 
@@ -874,7 +934,7 @@ class ModelSerializer(Serializer):
                 m2m_data[field_name] = attrs.pop(field_name)
 
         # Forward m2m relations
-        for field in meta.many_to_many:
+        for field in meta.many_to_many + meta.virtual_fields:
             if field.name in attrs:
                 m2m_data[field.name] = attrs.pop(field.name)
 
@@ -934,11 +994,16 @@ class ModelSerializer(Serializer):
             del(obj._m2m_data)
 
         if getattr(obj, '_related_data', None):
+            related_fields = dict([
+                (field.get_accessor_name(), field)
+                for field, model
+                in obj._meta.get_all_related_objects_with_model()
+            ])
             for accessor_name, related in obj._related_data.items():
                 if isinstance(related, RelationsList):
                     # Nested reverse fk relationship
                     for related_item in related:
-                        fk_field = obj._meta.get_field_by_name(accessor_name)[0].field.name
+                        fk_field = related_fields[accessor_name].field.name
                         setattr(related_item, fk_field, obj)
                         self.save_object(related_item)
 
@@ -965,6 +1030,7 @@ class HyperlinkedModelSerializerOptions(ModelSerializerOptions):
         super(HyperlinkedModelSerializerOptions, self).__init__(meta)
         self.view_name = getattr(meta, 'view_name', None)
         self.lookup_field = getattr(meta, 'lookup_field', None)
+        self.url_field_name = getattr(meta, 'url_field_name', api_settings.URL_FIELD_NAME)
 
 
 class HyperlinkedModelSerializer(ModelSerializer):
@@ -983,13 +1049,13 @@ class HyperlinkedModelSerializer(ModelSerializer):
         if self.opts.view_name is None:
             self.opts.view_name = self._get_default_view_name(self.opts.model)
 
-        if 'url' not in fields:
+        if self.opts.url_field_name not in fields:
             url_field = self._hyperlink_identify_field_class(
                 view_name=self.opts.view_name,
                 lookup_field=self.opts.lookup_field
             )
             ret = self._dict_class()
-            ret['url'] = url_field
+            ret[self.opts.url_field_name] = url_field
             ret.update(fields)
             fields = ret
 
@@ -1025,7 +1091,7 @@ class HyperlinkedModelSerializer(ModelSerializer):
         We need to override the default, to use the url as the identity.
         """
         try:
-            return data.get('url', None)
+            return data.get(self.opts.url_field_name, None)
         except AttributeError:
             return None
 

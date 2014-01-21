@@ -53,6 +53,25 @@ You can determine your currently installed version using `pip freeze`:
 
 ## 2.3.x series
 
+### 2.3.12
+
+**Date**: 15th January 2014
+
+* **Security fix**: `OrderingField` now only allows ordering on readable serializer fields, or on fields explicitly specified using `ordering_fields`. This prevents users being able to order by fields that are not visible in the API, and exploiting the ordering of sensitive data such as password hashes.
+* Bugfix: `write_only = True` fields now display in the browsable API.
+
+### 2.3.11
+
+**Date**: 14th January 2014
+
+* Added `write_only` serializer field argument.
+* Added `write_only_fields` option to `ModelSerializer` classes.
+* JSON renderer now deals with objects that implement a dict-like interface.
+* Fix compatiblity with newer versions of `django-oauth-plus`.
+* Bugfix: Refine behavior that calls model manager `all()` across nested serializer relationships, preventing erronous behavior with some non-ORM objects, and preventing unneccessary queryset re-evaluations.
+* Bugfix: Allow defaults on BooleanFields to be properly honored when values are not supplied.
+* Bugfix: Prevent double-escaping of non-latin1 URL query params when appending `format=json` params.
+
 ### 2.3.10
 
 **Date**: 6th December 2013
@@ -95,6 +114,19 @@ You can determine your currently installed version using `pip freeze`:
 * Bugfix: `client.force_authenticate(None)` should also clear session info if it exists.
 * Bugfix: Client sending empty string instead of file now clears `FileField`.
 * Bugfix: Empty values on ChoiceFields with `required=False` now consistently return `None`.
+* Bugfix: Clients setting `page=0` now simply returns the default page size, instead of disabling pagination. [*]
+
+---
+
+[*] Note that the change in `page=0` behaviour fixes what is considered to be a bug in how clients can effect the pagination size.  However if you were relying on this behavior you will need to add the following mixin to your list views in order to preserve the existing behavior.
+
+    class DisablePaginationMixin(object):
+        def get_paginate_by(self, queryset=None):
+            if self.request.QUERY_PARAMS[self.paginate_by_param] == '0':
+                return None
+            return super(DisablePaginationMixin, self).get_paginate_by(queryset)
+
+---
 
 ### 2.3.7
 
@@ -116,9 +148,9 @@ You can determine your currently installed version using `pip freeze`:
 * Added `trailing_slash` option to routers.
 * Include support for `HttpStreamingResponse`.
 * Support wider range of default serializer validation when used with custom model fields.
-* UTF-8 Support for browsable API descriptions.  
+* UTF-8 Support for browsable API descriptions.
 * OAuth2 provider uses timezone aware datetimes when supported.
-* Bugfix: Return error correctly when OAuth non-existent consumer occurs. 
+* Bugfix: Return error correctly when OAuth non-existent consumer occurs.
 * Bugfix: Allow `FileUploadParser` to correctly filename if provided as URL kwarg.
 * Bugfix: Fix `ScopedRateThrottle`.
 
@@ -159,7 +191,7 @@ You can determine your currently installed version using `pip freeze`:
 * Added SearchFilter
 * Added OrderingFilter
 * Added GenericViewSet
-* Bugfix: Multiple `@action` and `@link` methods now allowed on viewsets. 
+* Bugfix: Multiple `@action` and `@link` methods now allowed on viewsets.
 * Bugfix: Fix API Root view issue with DjangoModelPermissions
 
 ### 2.3.2
@@ -212,7 +244,7 @@ You can determine your currently installed version using `pip freeze`:
 * Long HTTP headers in browsable API are broken in multiple lines when possible.
 * Bugfix: Fix regression with DjangoFilterBackend not worthing correctly with single object views.
 * Bugfix: OAuth should fail hard when invalid token used.
-* Bugfix: Fix serializer potentially returning `None` object for models that define `__bool__` or `__len__`. 
+* Bugfix: Fix serializer potentially returning `None` object for models that define `__bool__` or `__len__`.
 
 ### 2.2.5
 

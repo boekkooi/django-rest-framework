@@ -223,7 +223,7 @@ class Request(object):
     def user(self, value):
         """
         Sets the user on the current request. This is necessary to maintain
-        compatilbility with django.contrib.auth where the user proprety is
+        compatibility with django.contrib.auth where the user property is
         set in the login and logout functions.
         """
         self._user = value
@@ -279,10 +279,9 @@ class Request(object):
         if not _hasattr(self, '_method'):
             self._method = self._request.method
 
-            if self._method == 'POST':
-                # Allow X-HTTP-METHOD-OVERRIDE header
-                self._method = self.META.get('HTTP_X_HTTP_METHOD_OVERRIDE',
-                                             self._method)
+            # Allow X-HTTP-METHOD-OVERRIDE header
+            self._method = self.META.get('HTTP_X_HTTP_METHOD_OVERRIDE',
+                                         self._method)
 
     def _load_stream(self):
         """

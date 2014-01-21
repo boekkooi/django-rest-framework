@@ -248,6 +248,7 @@ class WritableField(Field):
     """
     Base for read/write fields.
     """
+    write_only = False
     default_validators = []
     default_error_messages = {
         'required': _('This field is required.'),
@@ -257,13 +258,17 @@ class WritableField(Field):
     default = None
 
     def __init__(self, source=None, label=None, help_text=None,
-                 read_only=False, required=None,
+                 read_only=False, write_only=False, required=None,
                  validators=[], error_messages=None, widget=None,
                  default=None, blank=None):
 
         super(WritableField, self).__init__(source=source, label=label, help_text=help_text)
 
         self.read_only = read_only
+        self.write_only = write_only
+
+        assert not (read_only and write_only), "Cannot set read_only=True and write_only=True"
+
         if required is None:
             self.required = not(read_only)
         else:
@@ -312,6 +317,11 @@ class WritableField(Field):
                     errors.extend(e.messages)
         if errors:
             raise ValidationError(errors)
+
+    def field_to_native(self, obj, field_name):
+        if self.write_only:
+            return None
+        return super(WritableField, self).field_to_native(obj, field_name)
 
     def field_from_native(self, data, files, field_name, into):
         """
@@ -423,7 +433,7 @@ class BooleanField(WritableField):
     def field_from_native(self, data, files, field_name, into):
         # HTML checkboxes do not explicitly represent unchecked as `False`
         # we deal with that here...
-        if isinstance(data, QueryDict):
+        if isinstance(data, QueryDict) and self.default is None:
             self.default = False
 
         return super(BooleanField, self).field_from_native(
